@@ -12,7 +12,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 const PUSHINPAY_API_KEY = '253e4917e0af56f093b2d5c26349cd7c:eba256e2e9b6b0d3578c20c38fe89e43c8d860bb7c4f92b0090714f0152dc2eaaf417a10ac4ac0242a08bed6c202cd15574e11779902:362c22215b3a3f52935c498c6e71b4ee';
-const PUSHINPAY_BASE_URL = 'https://api.pushinpay.com/v1';
+const PUSHINPAY_BASE_URL = 'https://api.pushinpay.com/v1/payments';
 const WEBHOOK_URL = 'https://backendpushin.onrender.com/webhook/pix';
 
 app.use(cors());
@@ -93,7 +93,7 @@ app.post('/criar-pagamento', async (req, res) => {
   }
 
   try {
-    const response = await axios.post(`${PUSHINPAY_BASE_URL}/pix`, {
+    const response = await axios.post(`${PUSHINPAY_BASE_URL}/pix/charges`, {
       amount: parseFloat(valor),
       description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
       callback_url: WEBHOOK_URL
@@ -142,11 +142,13 @@ app.post('/criar-pagamento', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Erro ao criar pagamento:', error.response?.data || error.message);
+    console.error('Erro completo:', error);
+    console.error('Resposta de erro:', error.response?.data);
     res.status(500).json({ 
       success: false,
       error: 'Erro ao criar pagamento',
-      detalhes: error.response?.data || error.message 
+      detalhes: error.response?.data || error.message,
+      endpointUsado: `${PUSHINPAY_BASE_URL}/pix/charges`
     });
   }
 });

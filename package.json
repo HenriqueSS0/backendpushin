@@ -1,13 +1,21 @@
 {
-  "name": "netlify-checkout-uploader",
+  "name": "pushinpay-backend",
   "version": "1.0.0",
+  "description": "Backend para integração com PushinPay",
   "type": "module",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "nodemon index.js"
   },
   "dependencies": {
+    "axios": "^1.6.7",
+    "cors": "^2.8.5",
     "express": "^4.18.2",
-    "node-fetch": "^3.3.2"
+    "fs": "^0.0.1-security",
+    "path": "^0.12.7"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }

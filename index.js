@@ -61,7 +61,7 @@ app.post('/criar-pagamento', async (req, res) => {
   }
 
   // Converter para centavos e garantir que é inteiro
-  const valorCentavos = Math.round(parseFloat(valor) * 100;
+  const valorCentavos = Math.round(parseFloat(valor) * 100);
   
   if (valorCentavos < 50) {
     return res.status(400).json({
@@ -150,7 +150,6 @@ app.post('/criar-pagamento', async (req, res) => {
     });
   }
 });
-
 // ==================== WEBHOOK ====================
 app.post('/webhook/pix', (req, res) => {
   logWebhook(req.body);

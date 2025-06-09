@@ -135,7 +135,7 @@ app.post('/criar-pagamento', async (req, res) => {
     // Try primary endpoint first
     const response = await axios.post(`${PUSHINPAY_BASE_URL}/pix/cashIn`, payload, {
       headers: {
-        'Authorization': `Bearer ${PUSHINPAY_API_KEY}`,
+        'Authorization': `Basic ${PUSHINPAY_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },

@@ -13,7 +13,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 // ✅ TOKEN correto via x-api-key
-const PUSHINPAY_API_KEY = 'm5F54MDdH4l8W7Wj2vCuuA0hDN7IU7yvhF6mzwzU5ad0138a';
+const PUSHINPAY_API_KEY = '33108|m5F54MDdH4l8W7Wj2vCuuA0hDN7IU7yvhF6mzwzU5ad0138a';
 const PUSHINPAY_BASE_URL = 'https://api.pushinpay.com.br/api';
 const WEBHOOK_URL = 'https://backendpushin.onrender.com/webhook/pix';
 

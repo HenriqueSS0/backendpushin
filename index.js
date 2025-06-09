@@ -1,14 +1,19 @@
-const express = require('express');
-const axios = require('axios');
-const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+import express from 'express';
+import axios from 'axios';
+import cors from 'cors';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
 const PUSHINPAY_API_KEY = '253e4917e0af56f093b2d5c26349cd7c:eba256e2e9b6b0d3578c20c38fe89e43c8d860bb7c4f92b0090714f0152dc2eaaf417a10ac4ac0242a08bed6c202cd15574e11779902:362c22215b3a3f52935c498c6e71b4ee';
 const PUSHINPAY_BASE_URL = 'https://api.pushinpay.com/v1';
-const WEBHOOK_URL = 'https://backendpushin.onrender.com/webhook/pix'; // URL atualizada para seu servidor no Render
+const WEBHOOK_URL = 'https://backendpushin.onrender.com/webhook/pix';
 
 app.use(cors());
 app.use(express.json());
@@ -18,7 +23,7 @@ const usersFilePath = path.join(__dirname, 'users.json');
 const pagamentosPath = path.join(__dirname, 'pagamentos.json');
 const webhooksLogPath = path.join(__dirname, 'webhooks.log');
 
-// Garante que os arquivos existam ao iniciar
+// Ensure files exist on startup
 if (!fs.existsSync(usersFilePath)) {
   fs.writeFileSync(usersFilePath, '[]');
 }
@@ -26,7 +31,7 @@ if (!fs.existsSync(pagamentosPath)) {
   fs.writeFileSync(pagamentosPath, '[]');
 }
 
-// Funções auxiliares (mantidas as mesmas)
+// Helper functions
 function readUsersFromFile() {
   try {
     return JSON.parse(fs.readFileSync(usersFilePath, 'utf8'));
@@ -56,7 +61,7 @@ function logWebhook(data) {
   fs.appendFileSync(webhooksLogPath, logEntry, 'utf8');
 }
 
-// ==================== AUTENTICAÇÃO ====================
+// ==================== AUTHENTICATION ====================
 app.post('/register', (req, res) => {
   const { username, password } = req.body;
   const users = readUsersFromFile();
@@ -79,7 +84,7 @@ app.post('/login', (req, res) => {
   res.status(200).json({ success: true, message: 'Login bem-sucedido!', user: userWithoutPassword });
 });
 
-// ==================== CRIAR PAGAMENTO - PUSHINPAY PIX ====================
+// ==================== CREATE PAYMENT - PUSHINPAY PIX ====================
 app.post('/criar-pagamento', async (req, res) => {
   const { valor, descricao, entregavelUrl, cliente, produto, orderBumps } = req.body;
 
@@ -91,7 +96,7 @@ app.post('/criar-pagamento', async (req, res) => {
     const response = await axios.post(`${PUSHINPAY_BASE_URL}/pix`, {
       amount: parseFloat(valor),
       description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
-      callback_url: WEBHOOK_URL // Usando a constante definida acima
+      callback_url: WEBHOOK_URL
     }, {
       headers: {
         'Authorization': `Bearer ${PUSHINPAY_API_KEY}`,
@@ -118,7 +123,7 @@ app.post('/criar-pagamento', async (req, res) => {
       orderBumps,
       dataCriacao: new Date().toISOString(),
       expiration: data.expiration,
-      payer: data.payer // Informações do pagador, se disponíveis
+      payer: data.payer
     };
 
     pagamentos.push(novoPagamento);
@@ -146,7 +151,7 @@ app.post('/criar-pagamento', async (req, res) => {
   }
 });
 
-// ==================== WEBHOOK PUSHINPAY ====================
+// ==================== PUSHINPAY WEBHOOK ====================
 app.post('/webhook/pix', (req, res) => {
   logWebhook(req.body);
   
@@ -186,7 +191,7 @@ app.post('/webhook/pix', (req, res) => {
   res.sendStatus(200);
 });
 
-// ==================== ENDPOINTS ADICIONAIS ====================
+// ==================== ADDITIONAL ENDPOINTS ====================
 app.get('/pagamentos', (req, res) => {
   const pagamentos = readPagamentosFromFile();
   res.json(pagamentos);
@@ -248,7 +253,7 @@ app.get('/verificar-status', (req, res) => {
   });
 });
 
-// ==================== INICIAR SERVIDOR ====================
+// ==================== START SERVER ====================
 app.listen(PORT, () => {
   console.log(`Servidor rodando em http://localhost:${PORT}`);
   console.log(`Webhook configurado para: ${WEBHOOK_URL}`);

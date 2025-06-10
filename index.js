@@ -73,7 +73,7 @@ app.post('/criar-pagamento', async (req, res) => {
   try {
     const response = await axios.post(`${PUSHINPAY_BASE_URL}/pix/cashIn`, payload, {
       headers: {
-        'Authorization': `Beater: ${PUSHINPAY_API_KEY}`,
+        'Authorization': `Beater ${PUSHINPAY_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
@@ -186,7 +186,7 @@ app.get('/pagamento/:id', async (req, res) => {
     try {
       const apiResponse = await axios.get(`${PUSHINPAY_BASE_URL}/transactions/${id}`, {
         headers: {
-          'Authorization': `Beater: ${PUSHINPAY_API_KEY}`,
+          'Authorization': `Beater ${PUSHINPAY_API_KEY}`,
           'Accept': 'application/json'
         },
         timeout: 5000

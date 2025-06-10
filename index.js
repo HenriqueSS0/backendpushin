@@ -5,14 +5,12 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ TOKEN correto via x-api-key
 const PUSHINPAY_API_KEY = '33108|m5F54MDdH4l8W7Wj2vCuuA0hDN7IU7yvhF6mzwzU5ad0138a';
 const PUSHINPAY_BASE_URL = 'https://api.pushinpay.com.br/api';
 const WEBHOOK_URL = 'https://backendpushin.onrender.com/webhook/pix';
@@ -75,7 +73,7 @@ app.post('/criar-pagamento', async (req, res) => {
   try {
     const response = await axios.post(`${PUSHINPAY_BASE_URL}/pix/cashIn`, payload, {
       headers: {
-        'Authorization': 'Beater: ${PUSHINPAY_API_KEY}',
+        'Authorization': `Beater: ${PUSHINPAY_API_KEY}`,
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       },
@@ -188,7 +186,7 @@ app.get('/pagamento/:id', async (req, res) => {
     try {
       const apiResponse = await axios.get(`${PUSHINPAY_BASE_URL}/transactions/${id}`, {
         headers: {
-          'Authorization': 'Beater: ${PUSHINPAY_API_KEY}',
+          'Authorization': `Beater: ${PUSHINPAY_API_KEY}`,
           'Accept': 'application/json'
         },
         timeout: 5000

@@ -271,7 +271,7 @@ app.post('/webhook/pix', (req, res) => {
   res.status(200).json({ success: true, message: 'Webhook processado' });
 });
 
-// ROTA PARA VERIFICAR STATUS COM CONSULTA À API
+// ROTA PARA VERIFICAR STATUS COM CONSULTA À API CORRIGIDA
 app.get('/verificar-status', async (req, res) => {
   const { transactionId } = req.query;
 
@@ -297,12 +297,13 @@ app.get('/verificar-status', async (req, res) => {
     });
   }
 
-  // Se ainda está PENDING, consultar a API da PushinPay
+  // Se ainda está PENDING, consultar a API da PushinPay com o endpoint correto
   if (pagamento.status === 'PENDING') {
     try {
       console.log(`🔄 Consultando API PushinPay para: ${transactionId}`);
       
-      const apiResponse = await axios.get(`https://api.pushinpay.com.br/api/pix/status/${transactionId}`, {
+      // ENDPOINT CORRETO: /api/transactions/{ID} em vez de /api/pix/status/{ID}
+      const apiResponse = await axios.get(`https://api.pushinpay.com.br/api/transactions/${transactionId}`, {
         headers: {
           'Authorization': `Bearer ${API_TOKEN}`,
           'Content-Type': 'application/json'

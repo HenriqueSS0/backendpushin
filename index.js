@@ -1,19 +1,12 @@
-import express from 'express';
-import axios from 'axios';
-import cors from 'cors';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const express = require('express');
+const axios = require('axios');
+const cors = require('cors');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-const PUSHINPAY_API_KEY = '33108|m5F54MDdH4l8W7Wj2vCuuA0hDN7IU7yvhF6mzwzU5ad0138a';
-const PUSHINPAY_BASE_URL = 'https://api.pushinpay.com.br/api';
-const WEBHOOK_URL = 'https://backendpushin.onrender.com/webhook/pix';
+const PORT = 3000;
+const API_TOKEN = '33108|m5F54MDdH4l8W7Wj2vCuuA0hDN7IU7yvhF6mzwzU5ad0138a';
 
 app.use(cors());
 app.use(express.json());
@@ -23,202 +16,185 @@ const usersFilePath = path.join(__dirname, 'users.json');
 const pagamentosPath = path.join(__dirname, 'pagamentos.json');
 const webhooksLogPath = path.join(__dirname, 'webhooks.log');
 
-[usersFilePath, pagamentosPath, webhooksLogPath].forEach(filePath => {
-  if (!fs.existsSync(filePath)) {
-    fs.writeFileSync(filePath, filePath.endsWith('.json') ? '[]' : '');
-  }
-});
+if (!fs.existsSync(usersFilePath)) fs.writeFileSync(usersFilePath, '[]');
+if (!fs.existsSync(pagamentosPath)) fs.writeFileSync(pagamentosPath, '[]');
 
-const readJSONFile = (filePath) => {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
-  } catch {
-    return [];
-  }
-};
+function readUsersFromFile() {
+  try { return JSON.parse(fs.readFileSync(usersFilePath, 'utf8')); } 
+  catch { return []; }
+}
 
-const saveJSONFile = (filePath, data) => {
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-};
+function saveUsersToFile(users) {
+  fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
+}
 
-const logWebhook = (data) => {
+function readPagamentosFromFile() {
+  try { return JSON.parse(fs.readFileSync(pagamentosPath, 'utf8')); } 
+  catch { return []; }
+}
+
+function savePagamentosToFile(pagamentos) {
+  fs.writeFileSync(pagamentosPath, JSON.stringify(pagamentos, null, 2));
+}
+
+function logWebhook(data) {
   const logEntry = `${new Date().toISOString()} - ${JSON.stringify(data)}\n`;
   fs.appendFileSync(webhooksLogPath, logEntry, 'utf8');
-};
+}
 
-// ==================== PIX PAYMENT ====================
+app.post('/register', (req, res) => {
+  const { username, password } = req.body;
+  const users = readUsersFromFile();
+  if (users.find(u => u.username === username)) return res.status(400).json({ message: 'Usuário já existe' });
+  users.push({ username, password });
+  saveUsersToFile(users);
+  res.status(201).json({ message: 'Usuário registrado com sucesso!' });
+});
+
+app.post('/login', (req, res) => {
+  const { username, password } = req.body;
+  const users = readUsersFromFile();
+  const user = users.find(u => u.username === username && u.password === password);
+  if (!user) return res.status(401).json({ success: false, message: 'Credenciais inválidas' });
+  const { password: _, ...userWithoutPassword } = user;
+  res.status(200).json({ success: true, message: 'Login bem-sucedido!', user: userWithoutPassword });
+});
+
+app.post('/logout', (req, res) => {
+  const { username } = req.body;
+  const users = readUsersFromFile();
+  const index = users.findIndex(u => u.username === username);
+  if (index !== -1) {
+    users[index].loggedIn = false;
+    saveUsersToFile(users);
+    return res.json({ message: 'Logout realizado com sucesso' });
+  }
+  res.status(404).json({ message: 'Usuário não encontrado' });
+});
+
 app.post('/criar-pagamento', async (req, res) => {
-  const { valor, descricao, entregavelUrl, cliente, produto } = req.body;
+  const { valor, descricao, entregavelUrl, cliente, produto, orderBumps } = req.body;
 
-  if (!valor || isNaN(valor)) {
-    return res.status(400).json({ success: false, error: 'Valor inválido ou não informado' });
-  }
-
-  const valorCentavos = Math.round(parseFloat(valor) * 100);
-
-  if (valorCentavos < 50) {
-    return res.status(400).json({ success: false, error: 'Valor mínimo é de 50 centavos (R$ 0,50)' });
-  }
-
-  const payload = {
-    value: valorCentavos,
-    webhook_url: WEBHOOK_URL,
-    ...(descricao && { description: descricao }),
-    ...(cliente && {
-      payer_name: cliente.nome,
-      payer_national_registration: cliente.cpf
-    })
-  };
+  if (!valor || isNaN(valor)) return res.status(400).json({ error: 'Valor inválido ou não informado' });
 
   try {
-    const response = await axios.post(`${PUSHINPAY_BASE_URL}/pix/cashIn`, payload, {
+    const response = await axios.post('https://api.pushinpay.com.br/api/pix/create', {
+      value: parseFloat(valor),
+      description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
+      callbackUrl: 'https://backendapi-4-r751.onrender.com/webhook/pix'
+    }, {
       headers: {
-        'Authorization': `Beater ${PUSHINPAY_API_KEY}`,
-        'Content-Type': 'application/json',
-        'Accept': 'application/json'
-      },
-      timeout: 10000
+        'Authorization': `Bearer ${API_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
     });
 
     const data = response.data;
+    const pagamentos = readPagamentosFromFile();
 
     const novoPagamento = {
-      id: data.id,
-      transactionId: data.id,
-      amount: valorCentavos / 100,
-      status: 'created',
-      qr_code: data.qr_code,
-      qr_code_base64: data.qr_code_base64,
-      descricao,
+      id: data.transactionId,
+      transactionId: data.transactionId,
+      amount: parseFloat(valor),
+      status: 'PENDING',
+      qrCodeUrl: data.qrCodeImage,
+      qrCodeText: data.qrCodeText,
       entregavelUrl,
       cliente,
       produto,
-      dataCriacao: new Date().toISOString(),
-      status_api: data.status,
-      payer: {
-        name: data.payer_name,
-        cpf: data.payer_national_registration
-      }
+      orderBumps,
+      dataCriacao: new Date().toISOString()
     };
 
-    const pagamentos = readJSONFile(pagamentosPath);
     pagamentos.push(novoPagamento);
-    saveJSONFile(pagamentosPath, pagamentos);
+    savePagamentosToFile(pagamentos);
 
     res.json({
       success: true,
-      id: data.id,
-      qr_code: data.qr_code,
-      qr_code_base64: data.qr_code_base64,
-      valor: valorCentavos / 100,
-      status: data.status,
-      payer: novoPagamento.payer
+      qrCodeUrl: data.qrCodeImage,
+      qrCodeText: data.qrCodeText,
+      payload: data.qrCodeText,
+      transactionId: data.transactionId,
+      id: data.transactionId
     });
 
   } catch (error) {
-    console.error('Erro na API PushinPay:', error.response?.data || error.message);
-
-    const statusCode = error.response?.status || 500;
-    const errorMessage = error.response?.data?.error || 'Erro ao criar pagamento';
-
-    res.status(statusCode).json({
+    console.error('Erro ao criar pagamento:', error.response?.data || error.message);
+    res.status(500).json({
       success: false,
-      error: errorMessage,
-      ...(error.response?.data && { details: error.response.data })
+      error: 'Erro ao criar pagamento',
+      detalhes: error.response?.data || error.message
     });
   }
 });
 
-// ==================== WEBHOOK ====================
 app.post('/webhook/pix', (req, res) => {
   logWebhook(req.body);
 
-  const paymentData = req.body;
-  const paymentId = paymentData.id;
-  const status = paymentData.status;
+  const { transactionId, status, value } = req.body;
 
-  if (!paymentId) {
-    return res.status(400).json({ error: 'ID do pagamento não fornecido' });
-  }
+  if (!transactionId) return res.sendStatus(400);
 
-  try {
-    const pagamentos = readJSONFile(pagamentosPath);
-    const pagamentoIndex = pagamentos.findIndex(p => p.id === paymentId);
+  const pagamentos = readPagamentosFromFile();
+  const index = pagamentos.findIndex(p => p.transactionId === transactionId);
 
-    if (pagamentoIndex !== -1) {
-      pagamentos[pagamentoIndex] = {
-        ...pagamentos[pagamentoIndex],
-        status,
-        status_api: status,
-        ...(status === 'paid' && {
-          dataConfirmacao: new Date().toISOString(),
-          payer_name: paymentData.payer_name,
-          payer_national_registration: paymentData.payer_national_registration,
-          end_to_end_id: paymentData.end_to_end_id
-        })
-      };
-
-      saveJSONFile(pagamentosPath, pagamentos);
-      console.log(`Pagamento ${paymentId} atualizado para status: ${status}`);
+  if (status === 'PAID') {
+    if (index !== -1) {
+      pagamentos[index].status = 'COMPLETED';
+      pagamentos[index].dataConfirmacao = new Date().toISOString();
+      savePagamentosToFile(pagamentos);
+      console.log(`✅ Pagamento ${transactionId} confirmado!`);
     } else {
-      console.warn(`Pagamento ${paymentId} não encontrado`);
-    }
-
-    res.sendStatus(200);
-  } catch (error) {
-    console.error('Erro ao processar webhook:', error);
-    res.status(500).json({ error: 'Erro ao processar webhook' });
-  }
-});
-
-// ==================== PAYMENT STATUS ====================
-app.get('/pagamento/:id', async (req, res) => {
-  const { id } = req.params;
-
-  const pagamentos = readJSONFile(pagamentosPath);
-  let pagamento = pagamentos.find(p => p.id === id);
-
-  if (!pagamento) {
-    return res.status(404).json({ success: false, error: 'Pagamento não encontrado localmente' });
-  }
-
-  if (pagamento.status !== 'paid') {
-    try {
-      const apiResponse = await axios.get(`${PUSHINPAY_BASE_URL}/transactions/${id}`, {
-        headers: {
-          'Authorization': `Beater ${PUSHINPAY_API_KEY}`,
-          'Accept': 'application/json'
-        },
-        timeout: 5000
+      pagamentos.push({
+        id: transactionId,
+        transactionId,
+        amount: value || 0,
+        status: 'COMPLETED',
+        dataConfirmacao: new Date().toISOString(),
+        notFound: true
       });
-
-      const apiData = apiResponse.data;
-
-      if (apiData.status !== pagamento.status) {
-        pagamento.status = apiData.status;
-        pagamento.status_api = apiData.status;
-
-        if (apiData.status === 'paid') {
-          pagamento.dataConfirmacao = new Date().toISOString();
-          pagamento.payer_name = apiData.payer_name;
-          pagamento.payer_national_registration = apiData.payer_national_registration;
-          pagamento.end_to_end_id = apiData.end_to_end_id;
-        }
-
-        const updatedPagamentos = pagamentos.map(p => p.id === id ? pagamento : p);
-        saveJSONFile(pagamentosPath, updatedPagamentos);
-      }
-    } catch (apiError) {
-      console.error('Erro ao consultar API PushinPay:', apiError.message);
+      savePagamentosToFile(pagamentos);
+      console.log(`⚠️ Pagamento ${transactionId} confirmado, mas não estava no sistema!`);
     }
   }
-
-  res.json({ success: true, data: pagamento });
+  res.sendStatus(200);
 });
 
-// ==================== START SERVER ====================
+app.get('/pagamentos', (req, res) => {
+  res.json(readPagamentosFromFile());
+});
+
+app.get('/webhooks-log', (req, res) => {
+  try {
+    const logs = fs.readFileSync(webhooksLogPath, 'utf8');
+    res.type('text').send(logs);
+  } catch {
+    res.status(404).json({ error: 'Log não encontrado' });
+  }
+});
+
+app.get('/verificar-status', (req, res) => {
+  const { transactionId } = req.query;
+  if (!transactionId) return res.status(400).json({ success: false, error: 'Transaction ID não fornecido' });
+
+  const pagamentos = readPagamentosFromFile();
+  const pagamento = pagamentos.find(p => p.transactionId === transactionId);
+
+  if (!pagamento) return res.status(404).json({ success: false, status: 'NOT_FOUND', message: 'Pagamento não encontrado' });
+
+  res.json({
+    success: true,
+    status: pagamento.status,
+    transactionId: pagamento.transactionId,
+    amount: pagamento.amount,
+    ...(pagamento.status === 'COMPLETED' && {
+      urlEntregavel: pagamento.entregavelUrl,
+      dataConfirmacao: pagamento.dataConfirmacao
+    }),
+    dataCriacao: pagamento.dataCriacao
+  });
+});
+
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${PORT}`);
-  console.log(`Webhook configurado para: ${WEBHOOK_URL}`);
-  console.log(`Modo: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`Servidor rodando em http://localhost:${PORT}`);
 });

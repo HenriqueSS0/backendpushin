@@ -485,4 +485,18 @@ app.use('*', (req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:
+  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+  console.log(`📊 Endpoints disponíveis:`);
+  console.log(`   POST /register - Registrar usuário`);
+  console.log(`   POST /login - Login de usuário`);
+  console.log(`   POST /criar-pagamento - Criar pagamento PIX`);
+  console.log(`   POST /webhook/pix - Webhook para receber atualizações`);
+  console.log(`   GET /verificar-status?transactionId=... - Verificar status`);
+  console.log(`   POST /forcar-status/:transactionId - Forçar status manualmente`);
+  console.log(`   POST /marcar-como-pago/:transactionId - Marcar como pago`);
+  console.log(`   GET /pagamentos-pendentes - Listar pagamentos pendentes`);
+  console.log(`   GET /pagamentos - Listar todos os pagamentos`);
+  console.log(`   GET /webhooks-log - Ver logs de webhooks`);
+  console.log(`   GET /debug/webhooks - Debug webhooks recebidos`);
+  console.log(`   GET /health - Health check`);
+});

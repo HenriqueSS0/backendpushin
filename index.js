@@ -143,7 +143,8 @@ app.post('/criar-pagamento', async (req, res) => {
     const responseData = response.data;
     console.log('Resposta da PushinPay:', responseData);
 
-    if (!responseData.qrCodeText && !responseData.qrCodeImage) {
+    // CORREÇÃO: Usar os nomes corretos dos campos da API
+    if (!responseData.qr_code && !responseData.qr_code_base64) {
       console.error('Dados do QR Code não retornados pela API:', responseData);
       return res.status(500).json({
         success: false,
@@ -155,12 +156,12 @@ app.post('/criar-pagamento', async (req, res) => {
     // Salvar no histórico de pagamentos
     const pagamentos = readPagamentosFromFile();
     const novoPagamento = {
-      id: responseData.transactionId,
-      transactionId: responseData.transactionId,
+      id: responseData.id || responseData.transactionId,
+      transactionId: responseData.id || responseData.transactionId,
       amount: valorFinal,
       status: 'PENDING',
-      qr_code: responseData.qrCodeText,
-      qr_code_base64: responseData.qrCodeImage,
+      qr_code: responseData.qr_code,
+      qr_code_base64: responseData.qr_code_base64,
       value: valorFinal,
       entregavelUrl,
       cliente,
@@ -175,12 +176,12 @@ app.post('/criar-pagamento', async (req, res) => {
     // Retornar resposta padronizada para o frontend
     const responseToFrontend = {
       success: true,
-      id: responseData.transactionId,
-      qr_code: responseData.qrCodeText,
-      qr_code_base64: responseData.qrCodeImage,
+      id: responseData.id || responseData.transactionId,
+      qr_code: responseData.qr_code,
+      qr_code_base64: responseData.qr_code_base64,
       status: 'pending',
       value: valorFinal,
-      transactionId: responseData.transactionId
+      transactionId: responseData.id || responseData.transactionId
     };
 
     console.log('Enviando para frontend:', responseToFrontend);

@@ -60,12 +60,63 @@ function logWebhook(data) {
   try {
     const logEntry = `${new Date().toISOString()} - ${JSON.stringify(data)}\n`;
     fs.appendFileSync(webhooksLogPath, logEntry, 'utf8');
+    console.log('Webhook logged:', data);
   } catch (error) {
     console.error('Erro ao registrar webhook:', error);
   }
 }
 
-// Rotas
+// Função para verificar status na API externa
+async function verificarStatusNaAPI(transactionId) {
+  try {
+    console.log(`🔍 Verificando status na API externa para: ${transactionId}`);
+    
+    const response = await axios.get(`https://api.pushinpay.com.br/api/pix/status/${transactionId}`, {
+      headers: {
+        'Authorization': `Bearer ${API_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      timeout: 10000
+    });
+
+    console.log(`📊 Resposta da API para ${transactionId}:`, response.data);
+    return response.data;
+  } catch (error) {
+    console.error(`❌ Erro ao verificar status na API para ${transactionId}:`, error.response?.data || error.message);
+    return null;
+  }
+}
+
+// Função para atualizar status local
+function atualizarStatusLocal(transactionId, novoStatus, valor = null) {
+  const pagamentos = readPagamentosFromFile();
+  const index = pagamentos.findIndex(p => p.transactionId === transactionId);
+  
+  if (index !== -1) {
+    const statusAnterior = pagamentos[index].status;
+    pagamentos[index].status = novoStatus;
+    
+    if (novoStatus === 'COMPLETED') {
+      pagamentos[index].dataConfirmacao = new Date().toISOString();
+    } else if (novoStatus === 'EXPIRED') {
+      pagamentos[index].dataExpiracao = new Date().toISOString();
+    }
+    
+    if (valor) {
+      pagamentos[index].amount = valor;
+      pagamentos[index].value = valor;
+    }
+    
+    savePagamentosToFile(pagamentos);
+    console.log(`✅ Status atualizado: ${transactionId} - ${statusAnterior} → ${novoStatus}`);
+    return true;
+  }
+  
+  console.log(`⚠️ Pagamento não encontrado para atualização: ${transactionId}`);
+  return false;
+}
+
+// Rotas existentes...
 app.post('/register', (req, res) => {
   const { username, password } = req.body;
   if (!username || !password) {
@@ -119,7 +170,6 @@ app.post('/criar-pagamento', async (req, res) => {
     });
   }
 
-  // Garantir que o valor está correto (não converter de centavos se já está em reais)
   const valorFinal = parseFloat(valor);
 
   try {
@@ -143,7 +193,6 @@ app.post('/criar-pagamento', async (req, res) => {
     const responseData = response.data;
     console.log('Resposta da PushinPay:', responseData);
 
-    // CORREÇÃO: Usar os nomes corretos dos campos da API
     if (!responseData.qr_code && !responseData.qr_code_base64) {
       console.error('Dados do QR Code não retornados pela API:', responseData);
       return res.status(500).json({
@@ -173,7 +222,6 @@ app.post('/criar-pagamento', async (req, res) => {
     pagamentos.push(novoPagamento);
     savePagamentosToFile(pagamentos);
 
-    // Retornar resposta padronizada para o frontend
     const responseToFrontend = {
       success: true,
       id: responseData.id || responseData.transactionId,
@@ -196,13 +244,6 @@ app.post('/criar-pagamento', async (req, res) => {
     if (error.response) {
       statusCode = error.response.status;
       errorMessage = error.response.data?.message || error.response.data?.error || errorMessage;
-      
-      // Log detalhado do erro da API externa
-      console.error('Erro da API PushinPay:', {
-        status: error.response.status,
-        data: error.response.data,
-        headers: error.response.headers
-      });
     }
 
     res.status(statusCode).json({
@@ -213,55 +254,49 @@ app.post('/criar-pagamento', async (req, res) => {
   }
 });
 
+// WEBHOOK MELHORADO
 app.post('/webhook/pix', (req, res) => {
-  console.log('Webhook recebido:', req.body);
+  console.log('=== WEBHOOK RECEBIDO ===');
+  console.log('Headers:', req.headers);
+  console.log('Body completo:', JSON.stringify(req.body, null, 2));
+  console.log('========================');
+  
   logWebhook(req.body);
 
-  const { transactionId, status, value } = req.body;
+  // Aceitar diferentes formatos de dados do webhook
+  const transactionId = req.body.transactionId || req.body.id || req.body.transaction_id;
+  const status = req.body.status || req.body.payment_status;
+  const value = req.body.value || req.body.amount || req.body.valor;
+
+  console.log('Dados extraídos:', { transactionId, status, value });
 
   if (!transactionId) {
-    console.error('Webhook sem transactionId:', req.body);
-    return res.status(400).json({ error: 'Transaction ID não fornecido' });
+    console.error('❌ Webhook sem ID de transação:', req.body);
+    return res.status(400).json({ error: 'ID de transação não fornecido' });
   }
 
-  const pagamentos = readPagamentosFromFile();
-  const index = pagamentos.findIndex(p => p.transactionId === transactionId);
+  // Aceitar diferentes status que indicam pagamento confirmado
+  const statusPago = ['PAID', 'COMPLETED', 'CONFIRMED', 'SUCCESS', 'APPROVED'];
+  const statusExpirado = ['EXPIRED', 'CANCELLED', 'FAILED', 'REJECTED'];
 
-  if (status === 'PAID') {
-    if (index !== -1) {
-      pagamentos[index].status = 'COMPLETED';
-      pagamentos[index].dataConfirmacao = new Date().toISOString();
-      savePagamentosToFile(pagamentos);
-      console.log(`✅ Pagamento ${transactionId} confirmado!`);
-    } else {
-      // Criar entrada para pagamento não encontrado
-      pagamentos.push({
-        id: transactionId,
-        transactionId,
-        amount: value || 0,
-        status: 'COMPLETED',
-        dataConfirmacao: new Date().toISOString(),
-        notFound: true
-      });
-      savePagamentosToFile(pagamentos);
-      console.log(`⚠️ Pagamento ${transactionId} confirmado, mas não estava no sistema!`);
-    }
-  } else if (status === 'EXPIRED') {
-    if (index !== -1) {
-      pagamentos[index].status = 'EXPIRED';
-      pagamentos[index].dataExpiracao = new Date().toISOString();
-      savePagamentosToFile(pagamentos);
-      console.log(`❌ Pagamento ${transactionId} expirado!`);
-    }
+  if (statusPago.includes(status?.toUpperCase())) {
+    console.log(`✅ Webhook indica pagamento confirmado para ${transactionId}`);
+    atualizarStatusLocal(transactionId, 'COMPLETED', value);
+  } else if (statusExpirado.includes(status?.toUpperCase())) {
+    console.log(`❌ Webhook indica pagamento expirado para ${transactionId}`);
+    atualizarStatusLocal(transactionId, 'EXPIRED');
+  } else {
+    console.log(`⚠️ Status desconhecido recebido: ${status} para ${transactionId}`);
   }
 
   res.sendStatus(200);
 });
 
-app.get('/verificar-status', (req, res) => {
+// ROTA MELHORADA PARA VERIFICAR STATUS
+app.get('/verificar-status', async (req, res) => {
   const { transactionId } = req.query;
 
-  console.log('Verificando status para:', transactionId);
+  console.log(`🔍 Verificando status para: ${transactionId}`);
 
   if (!transactionId) {
     return res.status(400).json({ 
@@ -270,16 +305,41 @@ app.get('/verificar-status', (req, res) => {
     });
   }
 
+  // Primeiro, verificar no banco local
   const pagamentos = readPagamentosFromFile();
-  const pagamento = pagamentos.find(p => p.transactionId === transactionId);
+  let pagamento = pagamentos.find(p => p.transactionId === transactionId);
 
   if (!pagamento) {
-    console.log('Pagamento não encontrado:', transactionId);
+    console.log('❌ Pagamento não encontrado:', transactionId);
     return res.status(404).json({ 
       success: false, 
       status: 'NOT_FOUND', 
       message: 'Pagamento não encontrado' 
     });
+  }
+
+  // Se o status local for PENDING, verificar na API externa
+  if (pagamento.status === 'PENDING') {
+    console.log(`⏳ Status local é PENDING, verificando na API externa...`);
+    
+    const statusExterno = await verificarStatusNaAPI(transactionId);
+    
+    if (statusExterno) {
+      // Mapear status da API externa para nosso sistema
+      let novoStatus = pagamento.status;
+      
+      if (['PAID', 'COMPLETED', 'CONFIRMED', 'SUCCESS', 'APPROVED'].includes(statusExterno.status?.toUpperCase())) {
+        novoStatus = 'COMPLETED';
+        atualizarStatusLocal(transactionId, 'COMPLETED', statusExterno.value || statusExterno.amount);
+      } else if (['EXPIRED', 'CANCELLED', 'FAILED', 'REJECTED'].includes(statusExterno.status?.toUpperCase())) {
+        novoStatus = 'EXPIRED';
+        atualizarStatusLocal(transactionId, 'EXPIRED');
+      }
+      
+      // Recarregar o pagamento após possível atualização
+      const pagamentosAtualizados = readPagamentosFromFile();
+      pagamento = pagamentosAtualizados.find(p => p.transactionId === transactionId) || pagamento;
+    }
   }
 
   const response = {
@@ -292,17 +352,82 @@ app.get('/verificar-status', (req, res) => {
     qr_code_base64: pagamento.qr_code_base64
   };
 
-  // Adicionar URL do entregável apenas se o pagamento foi completado
+  // Adicionar URL do entregável se pagamento foi completado
   if (pagamento.status === 'COMPLETED' && pagamento.entregavelUrl) {
     response.urlEntregavel = pagamento.entregavelUrl;
     response.dataConfirmacao = pagamento.dataConfirmacao;
   }
 
-  console.log('Status retornado:', response);
+  console.log('📊 Status final retornado:', response);
   res.json(response);
 });
 
-// Nova rota para verificar status via API externa (opcional)
+// NOVA ROTA PARA FORÇAR VERIFICAÇÃO E ATUALIZAÇÃO
+app.post('/forcar-verificacao/:transactionId', async (req, res) => {
+  const { transactionId } = req.params;
+  
+  console.log(`🔄 Forçando verificação para: ${transactionId}`);
+  
+  const statusExterno = await verificarStatusNaAPI(transactionId);
+  
+  if (!statusExterno) {
+    return res.status(500).json({
+      success: false,
+      error: 'Não foi possível verificar status na API externa'
+    });
+  }
+  
+  // Atualizar status local baseado na resposta da API
+  let novoStatus = 'PENDING';
+  
+  if (['PAID', 'COMPLETED', 'CONFIRMED', 'SUCCESS', 'APPROVED'].includes(statusExterno.status?.toUpperCase())) {
+    novoStatus = 'COMPLETED';
+    atualizarStatusLocal(transactionId, 'COMPLETED', statusExterno.value || statusExterno.amount);
+  } else if (['EXPIRED', 'CANCELLED', 'FAILED', 'REJECTED'].includes(statusExterno.status?.toUpperCase())) {
+    novoStatus = 'EXPIRED';
+    atualizarStatusLocal(transactionId, 'EXPIRED');
+  }
+  
+  res.json({
+    success: true,
+    statusAnterior: 'PENDING',
+    statusAtual: novoStatus,
+    dadosAPI: statusExterno,
+    message: `Status ${novoStatus === 'COMPLETED' ? 'PAGO' : novoStatus} confirmado via API externa`
+  });
+});
+
+// NOVA ROTA PARA FORÇAR STATUS MANUALMENTE (USO ADMINISTRATIVO)
+app.post('/forcar-status/:transactionId', (req, res) => {
+  const { transactionId } = req.params;
+  const { status } = req.body;
+  
+  if (!['COMPLETED', 'EXPIRED', 'PENDING'].includes(status)) {
+    return res.status(400).json({
+      success: false,
+      error: 'Status deve ser COMPLETED, EXPIRED ou PENDING'
+    });
+  }
+  
+  console.log(`⚡ Forçando status ${status} para: ${transactionId}`);
+  
+  const atualizado = atualizarStatusLocal(transactionId, status);
+  
+  if (atualizado) {
+    res.json({
+      success: true,
+      message: `Status forçado para ${status}`,
+      transactionId
+    });
+  } else {
+    res.status(404).json({
+      success: false,
+      error: 'Pagamento não encontrado'
+    });
+  }
+});
+
+// Rota para verificar status via API externa
 app.get('/verificar-status-externo', async (req, res) => {
   const { transactionId } = req.query;
 
@@ -313,55 +438,47 @@ app.get('/verificar-status-externo', async (req, res) => {
     });
   }
 
-  try {
-    // Tentar verificar status na API externa
-    const response = await axios.get(`https://api.pushinpay.com.br/api/pix/status/${transactionId}`, {
-      headers: {
-        'Authorization': `Bearer ${API_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    const statusData = response.data;
-    
-    // Atualizar status local se necessário
-    const pagamentos = readPagamentosFromFile();
-    const index = pagamentos.findIndex(p => p.transactionId === transactionId);
-    
-    if (index !== -1 && statusData.status === 'PAID' && pagamentos[index].status !== 'COMPLETED') {
-      pagamentos[index].status = 'COMPLETED';
-      pagamentos[index].dataConfirmacao = new Date().toISOString();
-      savePagamentosToFile(pagamentos);
-    }
-
-    res.json({
-      success: true,
-      status: statusData.status === 'PAID' ? 'COMPLETED' : statusData.status,
-      transactionId: transactionId,
-      externalData: statusData
-    });
-
-  } catch (error) {
-    console.error('Erro ao verificar status externo:', error.response?.data || error.message);
-    
+  const statusExterno = await verificarStatusNaAPI(transactionId);
+  
+  if (!statusExterno) {
     // Fallback para verificação local
     const pagamentos = readPagamentosFromFile();
     const pagamento = pagamentos.find(p => p.transactionId === transactionId);
     
     if (pagamento) {
-      res.json({
+      return res.json({
         success: true,
         status: pagamento.status,
         transactionId: pagamento.transactionId,
-        fallback: true
+        fallback: true,
+        message: 'Status obtido do banco local (API externa indisponível)'
       });
     } else {
-      res.status(404).json({
+      return res.status(404).json({
         success: false,
         error: 'Pagamento não encontrado'
       });
     }
   }
+
+  // Atualizar status local se necessário
+  const pagamentos = readPagamentosFromFile();
+  const index = pagamentos.findIndex(p => p.transactionId === transactionId);
+  
+  if (index !== -1) {
+    if (['PAID', 'COMPLETED', 'CONFIRMED', 'SUCCESS', 'APPROVED'].includes(statusExterno.status?.toUpperCase()) && pagamentos[index].status !== 'COMPLETED') {
+      atualizarStatusLocal(transactionId, 'COMPLETED', statusExterno.value || statusExterno.amount);
+    } else if (['EXPIRED', 'CANCELLED', 'FAILED', 'REJECTED'].includes(statusExterno.status?.toUpperCase()) && pagamentos[index].status !== 'EXPIRED') {
+      atualizarStatusLocal(transactionId, 'EXPIRED');
+    }
+  }
+
+  res.json({
+    success: true,
+    status: ['PAID', 'COMPLETED', 'CONFIRMED', 'SUCCESS', 'APPROVED'].includes(statusExterno.status?.toUpperCase()) ? 'COMPLETED' : statusExterno.status,
+    transactionId: transactionId,
+    externalData: statusExterno
+  });
 });
 
 app.get('/pagamentos', (req, res) => {
@@ -402,6 +519,42 @@ app.get('/health', (req, res) => {
   });
 });
 
+// NOVA ROTA PARA DEBUG - LISTAR TODOS OS WEBHOOKS RECEBIDOS
+app.get('/debug/webhooks', (req, res) => {
+  try {
+    const logs = fs.readFileSync(webhooksLogPath, 'utf8');
+    const linhas = logs.trim().split('\n').filter(linha => linha.length > 0);
+    
+    const webhooks = linhas.map(linha => {
+      try {
+        const [timestamp, ...jsonParts] = linha.split(' - ');
+        const jsonString = jsonParts.join(' - ');
+        return {
+          timestamp,
+          data: JSON.parse(jsonString)
+        };
+      } catch (e) {
+        return {
+          timestamp: 'unknown',
+          data: linha,
+          parseError: true
+        };
+      }
+    });
+    
+    res.json({
+      success: true,
+      totalWebhooks: webhooks.length,
+      webhooks: webhooks.slice(-50) // Últimos 50
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Erro ao analisar logs de webhook'
+    });
+  }
+});
+
 // Middleware de tratamento de erros
 app.use((err, req, res, next) => {
   console.error('Erro interno:', err);
@@ -424,4 +577,5 @@ app.use('*', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
   console.log(`📊 Health check: http://localhost:${PORT}/health`);
+  console.log(`🔧 Debug webhooks: http://localhost:${PORT}/debug/webhooks`);
 });

@@ -78,7 +78,7 @@ app.post('/criar-pagamento', async (req, res) => {
   if (!valor || isNaN(valor)) return res.status(400).json({ error: 'Valor inválido ou não informado' });
 
   try {
-    const response = await axios.post('https://api.pushinpay.com.br/api/pix/create', {
+    const response = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', {
       value: parseFloat(valor),
       description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
       callbackUrl: 'https://backendapi-4-r751.onrender.com/webhook/pix'

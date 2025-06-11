@@ -81,7 +81,7 @@ app.post('/criar-pagamento', async (req, res) => {
     const response = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', {
       value: parseFloat(valor),
       description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
-      callbackUrl: 'https://backendapi-4-r751.onrender.com/webhook/pix'
+      callbackUrl: 'https://backendpushin.onrender.com//webhook/pix'
     }, {
       headers: {
         'Authorization': `Bearer ${API_TOKEN}`,

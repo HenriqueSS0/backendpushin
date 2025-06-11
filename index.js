@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const API_TOKEN = '33108|m5F54MDdH4l8W7Wj2vCuuA0hDN7IU7yvhF6mzwzU5ad0138a';
 
 app.use(cors());
@@ -102,19 +102,33 @@ app.post('/login', (req, res) => {
 app.post('/criar-pagamento', async (req, res) => {
   const { valor, descricao, entregavelUrl, cliente, produto, orderBumps } = req.body;
 
+  console.log('Dados recebidos:', { valor, descricao, entregavelUrl, cliente, produto, orderBumps });
+
   // Validações
   if (valor === undefined || valor === null || isNaN(valor)) {
-    return res.status(400).json({ error: 'Valor inválido ou não informado' });
+    return res.status(400).json({ 
+      success: false,
+      error: 'Valor inválido ou não informado' 
+    });
   }
 
   if (!cliente || !cliente.nome || !cliente.email) {
-    return res.status(400).json({ error: 'Dados do cliente incompletos' });
+    return res.status(400).json({ 
+      success: false,
+      error: 'Dados do cliente incompletos' 
+    });
   }
 
-  // Converter valor (se enviado em centavos)
-  const valorFinal = valor > 1000 ? (valor / 100) : parseFloat(valor);
+  // Garantir que o valor está correto (não converter de centavos se já está em reais)
+  const valorFinal = parseFloat(valor);
 
   try {
+    console.log('Enviando para PushinPay:', {
+      value: valorFinal,
+      description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
+      callbackUrl: 'https://backendpushin.onrender.com/webhook/pix'
+    });
+
     const response = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', {
       value: valorFinal,
       description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
@@ -127,6 +141,26 @@ app.post('/criar-pagamento', async (req, res) => {
     });
 
     const responseData = response.data;
+    console.log('Resposta da PushinPay:', responseData);
+
+    // Validar se recebemos os dados necessários
+    if (!responseData.transactionId) {
+      console.error('TransactionId não retornado pela API:', responseData);
+      return res.status(500).json({
+        success: false,
+        error: 'API de pagamento não retornou ID da transação',
+        detalhes: responseData
+      });
+    }
+
+    if (!responseData.qrCodeText && !responseData.qrCodeImage) {
+      console.error('Dados do QR Code não retornados pela API:', responseData);
+      return res.status(500).json({
+        success: false,
+        error: 'API de pagamento não retornou dados do PIX',
+        detalhes: responseData
+      });
+    }
 
     // Salvar no histórico de pagamentos
     const pagamentos = readPagamentosFromFile();
@@ -137,7 +171,6 @@ app.post('/criar-pagamento', async (req, res) => {
       status: 'PENDING',
       qr_code: responseData.qrCodeText,
       qr_code_base64: responseData.qrCodeImage,
-      status: 'pending',
       value: valorFinal,
       entregavelUrl,
       cliente,
@@ -150,7 +183,7 @@ app.post('/criar-pagamento', async (req, res) => {
     savePagamentosToFile(pagamentos);
 
     // Retornar resposta padronizada para o frontend
-    res.json({
+    const responseToFrontend = {
       success: true,
       id: responseData.transactionId,
       qr_code: responseData.qrCodeText,
@@ -158,7 +191,10 @@ app.post('/criar-pagamento', async (req, res) => {
       status: 'pending',
       value: valorFinal,
       transactionId: responseData.transactionId
-    });
+    };
+
+    console.log('Enviando para frontend:', responseToFrontend);
+    res.json(responseToFrontend);
 
   } catch (error) {
     console.error('Erro ao criar pagamento:', error.response?.data || error.message);
@@ -168,7 +204,14 @@ app.post('/criar-pagamento', async (req, res) => {
     
     if (error.response) {
       statusCode = error.response.status;
-      errorMessage = error.response.data?.message || errorMessage;
+      errorMessage = error.response.data?.message || error.response.data?.error || errorMessage;
+      
+      // Log detalhado do erro da API externa
+      console.error('Erro da API PushinPay:', {
+        status: error.response.status,
+        data: error.response.data,
+        headers: error.response.headers
+      });
     }
 
     res.status(statusCode).json({
@@ -180,11 +223,13 @@ app.post('/criar-pagamento', async (req, res) => {
 });
 
 app.post('/webhook/pix', (req, res) => {
+  console.log('Webhook recebido:', req.body);
   logWebhook(req.body);
 
   const { transactionId, status, value } = req.body;
 
   if (!transactionId) {
+    console.error('Webhook sem transactionId:', req.body);
     return res.status(400).json({ error: 'Transaction ID não fornecido' });
   }
 
@@ -198,6 +243,7 @@ app.post('/webhook/pix', (req, res) => {
       savePagamentosToFile(pagamentos);
       console.log(`✅ Pagamento ${transactionId} confirmado!`);
     } else {
+      // Criar entrada para pagamento não encontrado
       pagamentos.push({
         id: transactionId,
         transactionId,
@@ -209,6 +255,13 @@ app.post('/webhook/pix', (req, res) => {
       savePagamentosToFile(pagamentos);
       console.log(`⚠️ Pagamento ${transactionId} confirmado, mas não estava no sistema!`);
     }
+  } else if (status === 'EXPIRED') {
+    if (index !== -1) {
+      pagamentos[index].status = 'EXPIRED';
+      pagamentos[index].dataExpiracao = new Date().toISOString();
+      savePagamentosToFile(pagamentos);
+      console.log(`❌ Pagamento ${transactionId} expirado!`);
+    }
   }
 
   res.sendStatus(200);
@@ -216,6 +269,8 @@ app.post('/webhook/pix', (req, res) => {
 
 app.get('/verificar-status', (req, res) => {
   const { transactionId } = req.query;
+
+  console.log('Verificando status para:', transactionId);
 
   if (!transactionId) {
     return res.status(400).json({ 
@@ -228,6 +283,7 @@ app.get('/verificar-status', (req, res) => {
   const pagamento = pagamentos.find(p => p.transactionId === transactionId);
 
   if (!pagamento) {
+    console.log('Pagamento não encontrado:', transactionId);
     return res.status(404).json({ 
       success: false, 
       status: 'NOT_FOUND', 
@@ -235,19 +291,86 @@ app.get('/verificar-status', (req, res) => {
     });
   }
 
-  res.json({
+  const response = {
     success: true,
     status: pagamento.status,
     transactionId: pagamento.transactionId,
     amount: pagamento.amount,
-    ...(pagamento.status === 'COMPLETED' && {
-      urlEntregavel: pagamento.entregavelUrl,
-      dataConfirmacao: pagamento.dataConfirmacao
-    }),
     dataCriacao: pagamento.dataCriacao,
     qr_code: pagamento.qr_code,
     qr_code_base64: pagamento.qr_code_base64
-  });
+  };
+
+  // Adicionar URL do entregável apenas se o pagamento foi completado
+  if (pagamento.status === 'COMPLETED' && pagamento.entregavelUrl) {
+    response.urlEntregavel = pagamento.entregavelUrl;
+    response.dataConfirmacao = pagamento.dataConfirmacao;
+  }
+
+  console.log('Status retornado:', response);
+  res.json(response);
+});
+
+// Nova rota para verificar status via API externa (opcional)
+app.get('/verificar-status-externo', async (req, res) => {
+  const { transactionId } = req.query;
+
+  if (!transactionId) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Transaction ID não fornecido' 
+    });
+  }
+
+  try {
+    // Tentar verificar status na API externa
+    const response = await axios.get(`https://api.pushinpay.com.br/api/pix/status/${transactionId}`, {
+      headers: {
+        'Authorization': `Bearer ${API_TOKEN}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const statusData = response.data;
+    
+    // Atualizar status local se necessário
+    const pagamentos = readPagamentosFromFile();
+    const index = pagamentos.findIndex(p => p.transactionId === transactionId);
+    
+    if (index !== -1 && statusData.status === 'PAID' && pagamentos[index].status !== 'COMPLETED') {
+      pagamentos[index].status = 'COMPLETED';
+      pagamentos[index].dataConfirmacao = new Date().toISOString();
+      savePagamentosToFile(pagamentos);
+    }
+
+    res.json({
+      success: true,
+      status: statusData.status === 'PAID' ? 'COMPLETED' : statusData.status,
+      transactionId: transactionId,
+      externalData: statusData
+    });
+
+  } catch (error) {
+    console.error('Erro ao verificar status externo:', error.response?.data || error.message);
+    
+    // Fallback para verificação local
+    const pagamentos = readPagamentosFromFile();
+    const pagamento = pagamentos.find(p => p.transactionId === transactionId);
+    
+    if (pagamento) {
+      res.json({
+        success: true,
+        status: pagamento.status,
+        transactionId: pagamento.transactionId,
+        fallback: true
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        error: 'Pagamento não encontrado'
+      });
+    }
+  }
 });
 
 app.get('/pagamentos', (req, res) => {
@@ -279,14 +402,35 @@ app.get('/webhooks-log', (req, res) => {
   }
 });
 
+// Rota de health check
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
+});
+
+// Middleware de tratamento de erros
 app.use((err, req, res, next) => {
   console.error('Erro interno:', err);
   res.status(500).json({
     success: false,
-    error: 'Erro interno no servidor'
+    error: 'Erro interno no servidor',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Middleware para rotas não encontradas
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    error: 'Rota não encontrada',
+    path: req.originalUrl
   });
 });
 
 app.listen(PORT, () => {
-  console.log(`Servidor rodando em http://localhost:${PORT}`);
+  console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+  console.log(`📊 Health check: http://localhost:${PORT}/health`);
 });

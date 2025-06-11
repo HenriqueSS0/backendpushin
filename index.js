@@ -233,46 +233,46 @@ app.post('/criar-pagamento', async (req, res) => {
   }
 });
 
-// WEBHOOK MELHORADO
+// WEBHOOK CORRIGIDO PARA PUSHINPAY
 app.post('/webhook/pix', (req, res) => {
-  console.log('=== WEBHOOK RECEBIDO ===');
+  console.log('=== WEBHOOK PUSHINPAY RECEBIDO ===');
   console.log('Headers:', req.headers);
   console.log('Body completo:', JSON.stringify(req.body, null, 2));
-  console.log('========================');
+  console.log('==================================');
   
   logWebhook(req.body);
 
-  // Aceitar diferentes formatos de dados do webhook
-  const transactionId = req.body.transactionId || req.body.id || req.body.transaction_id;
-  const status = req.body.status || req.body.payment_status;
-  const value = req.body.value || req.body.amount || req.body.valor;
+  // Formato específico da PushinPay
+  const transactionId = req.body.id || req.body.transactionId || req.body.transaction_id;
+  const status = req.body.status;
+  const value = req.body.value || req.body.amount;
 
-  console.log('Dados extraídos:', { transactionId, status, value });
+  console.log('Dados extraídos do webhook PushinPay:', { transactionId, status, value });
 
   if (!transactionId) {
     console.error('❌ Webhook sem ID de transação:', req.body);
     return res.status(400).json({ error: 'ID de transação não fornecido' });
   }
 
-  // Aceitar diferentes status que indicam pagamento confirmado
-  const statusPago = ['PAID', 'COMPLETED', 'CONFIRMED', 'SUCCESS', 'APPROVED'];
-  const statusExpirado = ['EXPIRED', 'CANCELLED', 'FAILED', 'REJECTED'];
-
-  if (statusPago.includes(status?.toUpperCase())) {
-    console.log(`✅ Webhook indica pagamento confirmado para ${transactionId}`);
+  // Status específicos da PushinPay
+  if (status === 'PAID' || status === 'COMPLETED' || status === 'CONFIRMED') {
+    console.log(`✅ PushinPay: Pagamento confirmado para ${transactionId}`);
     atualizarStatusLocal(transactionId, 'COMPLETED', value);
-  } else if (statusExpirado.includes(status?.toUpperCase())) {
-    console.log(`❌ Webhook indica pagamento expirado para ${transactionId}`);
+  } else if (status === 'EXPIRED' || status === 'CANCELLED' || status === 'FAILED') {
+    console.log(`❌ PushinPay: Pagamento expirado/cancelado para ${transactionId}`);
     atualizarStatusLocal(transactionId, 'EXPIRED');
+  } else if (status === 'PENDING' || status === 'WAITING') {
+    console.log(`⏳ PushinPay: Pagamento pendente para ${transactionId}`);
+    // Mantém como PENDING
   } else {
-    console.log(`⚠️ Status desconhecido recebido: ${status} para ${transactionId}`);
+    console.log(`⚠️ PushinPay: Status desconhecido recebido: ${status} para ${transactionId}`);
   }
 
-  res.sendStatus(200);
+  res.status(200).json({ success: true, message: 'Webhook processado' });
 });
 
-// ROTA SIMPLIFICADA PARA VERIFICAR STATUS
-app.get('/verificar-status', (req, res) => {
+// ROTA PARA VERIFICAR STATUS COM CONSULTA À API
+app.get('/verificar-status', async (req, res) => {
   const { transactionId } = req.query;
 
   console.log(`🔍 Verificando status para: ${transactionId}`);
@@ -284,7 +284,7 @@ app.get('/verificar-status', (req, res) => {
     });
   }
 
-  // Verificar no banco local
+  // Verificar no banco local primeiro
   const pagamentos = readPagamentosFromFile();
   let pagamento = pagamentos.find(p => p.transactionId === transactionId);
 
@@ -295,6 +295,40 @@ app.get('/verificar-status', (req, res) => {
       status: 'NOT_FOUND', 
       message: 'Pagamento não encontrado' 
     });
+  }
+
+  // Se ainda está PENDING, consultar a API da PushinPay
+  if (pagamento.status === 'PENDING') {
+    try {
+      console.log(`🔄 Consultando API PushinPay para: ${transactionId}`);
+      
+      const apiResponse = await axios.get(`https://api.pushinpay.com.br/api/pix/status/${transactionId}`, {
+        headers: {
+          'Authorization': `Bearer ${API_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const apiData = apiResponse.data;
+      console.log('📡 Resposta da API PushinPay:', apiData);
+
+      // Atualizar status baseado na resposta da API
+      if (apiData.status === 'PAID' || apiData.status === 'COMPLETED') {
+        console.log(`✅ API confirma pagamento para ${transactionId}`);
+        atualizarStatusLocal(transactionId, 'COMPLETED', apiData.value);
+        pagamento.status = 'COMPLETED';
+        pagamento.dataConfirmacao = new Date().toISOString();
+      } else if (apiData.status === 'EXPIRED' || apiData.status === 'CANCELLED') {
+        console.log(`❌ API confirma expiração para ${transactionId}`);
+        atualizarStatusLocal(transactionId, 'EXPIRED');
+        pagamento.status = 'EXPIRED';
+        pagamento.dataExpiracao = new Date().toISOString();
+      }
+
+    } catch (error) {
+      console.error('❌ Erro ao consultar API PushinPay:', error.response?.data || error.message);
+      // Continua com o status local se a API falhar
+    }
   }
 
   const response = {
@@ -317,7 +351,7 @@ app.get('/verificar-status', (req, res) => {
   res.json(response);
 });
 
-// NOVA ROTA PARA FORÇAR STATUS MANUALMENTE (SOLUÇÃO PARA SEU PROBLEMA)
+// ROTA PARA FORÇAR STATUS MANUALMENTE
 app.post('/forcar-status/:transactionId', (req, res) => {
   const { transactionId } = req.params;
   const { status } = req.body;
@@ -348,7 +382,7 @@ app.post('/forcar-status/:transactionId', (req, res) => {
   }
 });
 
-// NOVA ROTA PARA MARCAR COMO PAGO RAPIDAMENTE
+// ROTA PARA MARCAR COMO PAGO RAPIDAMENTE
 app.post('/marcar-como-pago/:transactionId', (req, res) => {
   const { transactionId } = req.params;
   
@@ -429,7 +463,7 @@ app.get('/health', (req, res) => {
   });
 });
 
-// NOVA ROTA PARA DEBUG - LISTAR TODOS OS WEBHOOKS RECEBIDOS
+// ROTA PARA DEBUG - LISTAR TODOS OS WEBHOOKS RECEBIDOS
 app.get('/debug/webhooks', (req, res) => {
   try {
     const logs = fs.readFileSync(webhooksLogPath, 'utf8');
@@ -486,17 +520,6 @@ app.use('*', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
-  console.log(`📊 Endpoints disponíveis:`);
-  console.log(`   POST /register - Registrar usuário`);
-  console.log(`   POST /login - Login de usuário`);
-  console.log(`   POST /criar-pagamento - Criar pagamento PIX`);
-  console.log(`   POST /webhook/pix - Webhook para receber atualizações`);
-  console.log(`   GET /verificar-status?transactionId=... - Verificar status`);
-  console.log(`   POST /forcar-status/:transactionId - Forçar status manualmente`);
-  console.log(`   POST /marcar-como-pago/:transactionId - Marcar como pago`);
-  console.log(`   GET /pagamentos-pendentes - Listar pagamentos pendentes`);
-  console.log(`   GET /pagamentos - Listar todos os pagamentos`);
-  console.log(`   GET /webhooks-log - Ver logs de webhooks`);
-  console.log(`   GET /debug/webhooks - Debug webhooks recebidos`);
-  console.log(`   GET /health - Health check`);
+  console.log(`📡 Webhook URL: http://localhost:${PORT}/webhook/pix`);
+  console.log(`🔍 Para testar: http://localhost:${PORT}/health`);
 });

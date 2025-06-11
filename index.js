@@ -143,16 +143,6 @@ app.post('/criar-pagamento', async (req, res) => {
     const responseData = response.data;
     console.log('Resposta da PushinPay:', responseData);
 
-    // Validar se recebemos os dados necessários
-    if (!responseData.transactionId) {
-      console.error('TransactionId não retornado pela API:', responseData);
-      return res.status(500).json({
-        success: false,
-        error: 'API de pagamento não retornou ID da transação',
-        detalhes: responseData
-      });
-    }
-
     if (!responseData.qrCodeText && !responseData.qrCodeImage) {
       console.error('Dados do QR Code não retornados pela API:', responseData);
       return res.status(500).json({

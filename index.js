@@ -16,36 +16,67 @@ const usersFilePath = path.join(__dirname, 'users.json');
 const pagamentosPath = path.join(__dirname, 'pagamentos.json');
 const webhooksLogPath = path.join(__dirname, 'webhooks.log');
 
+// Inicializar arquivos se não existirem
 if (!fs.existsSync(usersFilePath)) fs.writeFileSync(usersFilePath, '[]');
 if (!fs.existsSync(pagamentosPath)) fs.writeFileSync(pagamentosPath, '[]');
+if (!fs.existsSync(webhooksLogPath)) fs.writeFileSync(webhooksLogPath, '');
 
+// Funções auxiliares
 function readUsersFromFile() {
-  try { return JSON.parse(fs.readFileSync(usersFilePath, 'utf8')); } 
-  catch { return []; }
+  try {
+    return JSON.parse(fs.readFileSync(usersFilePath, 'utf8'));
+  } catch (error) {
+    console.error('Erro ao ler usuários:', error);
+    return [];
+  }
 }
 
 function saveUsersToFile(users) {
-  fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
+  try {
+    fs.writeFileSync(usersFilePath, JSON.stringify(users, null, 2));
+  } catch (error) {
+    console.error('Erro ao salvar usuários:', error);
+  }
 }
 
 function readPagamentosFromFile() {
-  try { return JSON.parse(fs.readFileSync(pagamentosPath, 'utf8')); } 
-  catch { return []; }
+  try {
+    return JSON.parse(fs.readFileSync(pagamentosPath, 'utf8'));
+  } catch (error) {
+    console.error('Erro ao ler pagamentos:', error);
+    return [];
+  }
 }
 
 function savePagamentosToFile(pagamentos) {
-  fs.writeFileSync(pagamentosPath, JSON.stringify(pagamentos, null, 2));
+  try {
+    fs.writeFileSync(pagamentosPath, JSON.stringify(pagamentos, null, 2));
+  } catch (error) {
+    console.error('Erro ao salvar pagamentos:', error);
+  }
 }
 
 function logWebhook(data) {
-  const logEntry = `${new Date().toISOString()} - ${JSON.stringify(data)}\n`;
-  fs.appendFileSync(webhooksLogPath, logEntry, 'utf8');
+  try {
+    const logEntry = `${new Date().toISOString()} - ${JSON.stringify(data)}\n`;
+    fs.appendFileSync(webhooksLogPath, logEntry, 'utf8');
+  } catch (error) {
+    console.error('Erro ao registrar webhook:', error);
+  }
 }
 
+// Rotas
 app.post('/register', (req, res) => {
   const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Username e password são obrigatórios' });
+  }
+
   const users = readUsersFromFile();
-  if (users.find(u => u.username === username)) return res.status(400).json({ message: 'Usuário já existe' });
+  if (users.find(u => u.username === username)) {
+    return res.status(400).json({ message: 'Usuário já existe' });
+  }
+
   users.push({ username, password });
   saveUsersToFile(users);
   res.status(201).json({ message: 'Usuário registrado com sucesso!' });
@@ -53,35 +84,41 @@ app.post('/register', (req, res) => {
 
 app.post('/login', (req, res) => {
   const { username, password } = req.body;
+  if (!username || !password) {
+    return res.status(400).json({ message: 'Username e password são obrigatórios' });
+  }
+
   const users = readUsersFromFile();
   const user = users.find(u => u.username === username && u.password === password);
-  if (!user) return res.status(401).json({ success: false, message: 'Credenciais inválidas' });
+  
+  if (!user) {
+    return res.status(401).json({ success: false, message: 'Credenciais inválidas' });
+  }
+
   const { password: _, ...userWithoutPassword } = user;
   res.status(200).json({ success: true, message: 'Login bem-sucedido!', user: userWithoutPassword });
-});
-
-app.post('/logout', (req, res) => {
-  const { username } = req.body;
-  const users = readUsersFromFile();
-  const index = users.findIndex(u => u.username === username);
-  if (index !== -1) {
-    users[index].loggedIn = false;
-    saveUsersToFile(users);
-    return res.json({ message: 'Logout realizado com sucesso' });
-  }
-  res.status(404).json({ message: 'Usuário não encontrado' });
 });
 
 app.post('/criar-pagamento', async (req, res) => {
   const { valor, descricao, entregavelUrl, cliente, produto, orderBumps } = req.body;
 
-  if (!valor || isNaN(valor)) return res.status(400).json({ error: 'Valor inválido ou não informado' });
+  // Validações
+  if (valor === undefined || valor === null || isNaN(valor)) {
+    return res.status(400).json({ error: 'Valor inválido ou não informado' });
+  }
+
+  if (!cliente || !cliente.nome || !cliente.email) {
+    return res.status(400).json({ error: 'Dados do cliente incompletos' });
+  }
+
+  // Converter valor (se enviado em centavos)
+  const valorFinal = valor > 1000 ? (valor / 100) : parseFloat(valor);
 
   try {
     const response = await axios.post('https://api.pushinpay.com.br/api/pix/cashIn', {
-      value: parseFloat(valor),
+      value: valorFinal,
       description: descricao || `Pagamento - ${produto || 'Produto não especificado'}`,
-      callbackUrl: 'https://backendpushin.onrender.com//webhook/pix'
+      callbackUrl: 'https://backendpushin.onrender.com/webhook/pix'
     }, {
       headers: {
         'Authorization': `Bearer ${API_TOKEN}`,
@@ -89,16 +126,19 @@ app.post('/criar-pagamento', async (req, res) => {
       }
     });
 
-    const data = response.data;
-    const pagamentos = readPagamentosFromFile();
+    const responseData = response.data;
 
+    // Salvar no histórico de pagamentos
+    const pagamentos = readPagamentosFromFile();
     const novoPagamento = {
-      id: data.transactionId,
-      transactionId: data.transactionId,
-      amount: parseFloat(valor),
+      id: responseData.transactionId,
+      transactionId: responseData.transactionId,
+      amount: valorFinal,
       status: 'PENDING',
-      qrCodeUrl: data.qrCodeImage,
-      qrCodeText: data.qrCodeText,
+      qr_code: responseData.qrCodeText,
+      qr_code_base64: responseData.qrCodeImage,
+      status: 'pending',
+      value: valorFinal,
       entregavelUrl,
       cliente,
       produto,
@@ -109,20 +149,31 @@ app.post('/criar-pagamento', async (req, res) => {
     pagamentos.push(novoPagamento);
     savePagamentosToFile(pagamentos);
 
+    // Retornar resposta padronizada para o frontend
     res.json({
       success: true,
-      qrCodeUrl: data.qrCodeImage,
-      qrCodeText: data.qrCodeText,
-      payload: data.qrCodeText,
-      transactionId: data.transactionId,
-      id: data.transactionId
+      id: responseData.transactionId,
+      qr_code: responseData.qrCodeText,
+      qr_code_base64: responseData.qrCodeImage,
+      status: 'pending',
+      value: valorFinal,
+      transactionId: responseData.transactionId
     });
 
   } catch (error) {
     console.error('Erro ao criar pagamento:', error.response?.data || error.message);
-    res.status(500).json({
+    
+    let errorMessage = 'Erro ao criar pagamento';
+    let statusCode = 500;
+    
+    if (error.response) {
+      statusCode = error.response.status;
+      errorMessage = error.response.data?.message || errorMessage;
+    }
+
+    res.status(statusCode).json({
       success: false,
-      error: 'Erro ao criar pagamento',
+      error: errorMessage,
       detalhes: error.response?.data || error.message
     });
   }
@@ -133,7 +184,9 @@ app.post('/webhook/pix', (req, res) => {
 
   const { transactionId, status, value } = req.body;
 
-  if (!transactionId) return res.sendStatus(400);
+  if (!transactionId) {
+    return res.status(400).json({ error: 'Transaction ID não fornecido' });
+  }
 
   const pagamentos = readPagamentosFromFile();
   const index = pagamentos.findIndex(p => p.transactionId === transactionId);
@@ -157,30 +210,30 @@ app.post('/webhook/pix', (req, res) => {
       console.log(`⚠️ Pagamento ${transactionId} confirmado, mas não estava no sistema!`);
     }
   }
+
   res.sendStatus(200);
-});
-
-app.get('/pagamentos', (req, res) => {
-  res.json(readPagamentosFromFile());
-});
-
-app.get('/webhooks-log', (req, res) => {
-  try {
-    const logs = fs.readFileSync(webhooksLogPath, 'utf8');
-    res.type('text').send(logs);
-  } catch {
-    res.status(404).json({ error: 'Log não encontrado' });
-  }
 });
 
 app.get('/verificar-status', (req, res) => {
   const { transactionId } = req.query;
-  if (!transactionId) return res.status(400).json({ success: false, error: 'Transaction ID não fornecido' });
+
+  if (!transactionId) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Transaction ID não fornecido' 
+    });
+  }
 
   const pagamentos = readPagamentosFromFile();
   const pagamento = pagamentos.find(p => p.transactionId === transactionId);
 
-  if (!pagamento) return res.status(404).json({ success: false, status: 'NOT_FOUND', message: 'Pagamento não encontrado' });
+  if (!pagamento) {
+    return res.status(404).json({ 
+      success: false, 
+      status: 'NOT_FOUND', 
+      message: 'Pagamento não encontrado' 
+    });
+  }
 
   res.json({
     success: true,
@@ -191,7 +244,46 @@ app.get('/verificar-status', (req, res) => {
       urlEntregavel: pagamento.entregavelUrl,
       dataConfirmacao: pagamento.dataConfirmacao
     }),
-    dataCriacao: pagamento.dataCriacao
+    dataCriacao: pagamento.dataCriacao,
+    qr_code: pagamento.qr_code,
+    qr_code_base64: pagamento.qr_code_base64
+  });
+});
+
+app.get('/pagamentos', (req, res) => {
+  try {
+    const pagamentos = readPagamentosFromFile();
+    res.json({
+      success: true,
+      data: pagamentos,
+      count: pagamentos.length
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: 'Erro ao recuperar pagamentos'
+    });
+  }
+});
+
+app.get('/webhooks-log', (req, res) => {
+  try {
+    const logs = fs.readFileSync(webhooksLogPath, 'utf8');
+    res.type('text').send(logs);
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: 'Erro ao ler logs',
+      detalhes: error.message 
+    });
+  }
+});
+
+app.use((err, req, res, next) => {
+  console.error('Erro interno:', err);
+  res.status(500).json({
+    success: false,
+    error: 'Erro interno no servidor'
   });
 });
 

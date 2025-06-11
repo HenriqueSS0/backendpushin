@@ -254,8 +254,8 @@ app.post('/webhook/pix', (req, res) => {
     return res.status(400).json({ error: 'ID de transação não fornecido' });
   }
 
-  // Status específicos da PushinPay
-  if (status === 'PAID' || status === 'COMPLETED' || status === 'CONFIRMED') {
+  // Status específicos da PushinPay - CORRIGIDO PARA INCLUIR 'paid'
+  if (status === 'PAID' || status === 'paid' || status === 'COMPLETED' || status === 'CONFIRMED') {
     console.log(`✅ PushinPay: Pagamento confirmado para ${transactionId}`);
     atualizarStatusLocal(transactionId, 'COMPLETED', value);
   } else if (status === 'EXPIRED' || status === 'CANCELLED' || status === 'FAILED') {
@@ -313,8 +313,8 @@ app.get('/verificar-status', async (req, res) => {
       const apiData = apiResponse.data;
       console.log('📡 Resposta da API PushinPay:', apiData);
 
-      // Atualizar status baseado na resposta da API
-      if (apiData.status === 'PAID' || apiData.status === 'COMPLETED') {
+      // Atualizar status baseado na resposta da API - CORRIGIDO PARA INCLUIR 'paid'
+      if (apiData.status === 'PAID' || apiData.status === 'paid' || apiData.status === 'COMPLETED') {
         console.log(`✅ API confirma pagamento para ${transactionId}`);
         atualizarStatusLocal(transactionId, 'COMPLETED', apiData.value);
         pagamento.status = 'COMPLETED';
